@@ -1,14 +1,15 @@
 import asyncio
-import json
-import io
 import base64
+import io
+import json
+
 import httpx
-from typing import List, Optional
 from PIL import Image
-from astrbot.api import logger, AstrBotConfig
-from astrbot.api.star import Context, Star, register
-from astrbot.api.event import filter, AstrMessageEvent
+
 import astrbot.api.message_components as Comp
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.star import Context, Star, register
 
 
 @register("astrbot_plugin_onelastimage", "timetetng", "One Last Kiss 卢浮宫风格图片生成器", "1.0", "https://github.com/timetetng/astrbot_plugin_onelastimage")
@@ -23,9 +24,9 @@ class OneLastImagePlugin(Star):
         self.max_images = self.config.get("max_images", 5)
         self.max_file_size_mb = self.config.get("max_file_size_mb", 3)
         self.max_file_size_bytes = self.max_file_size_mb * 1024 * 1024 # 转换为字节
-        
-        default_params_config = self.config.get("default_params") 
-        
+
+        default_params_config = self.config.get("default_params")
+
         if isinstance(default_params_config, dict):
             self.default_params = default_params_config
         elif isinstance(default_params_config, str):
@@ -37,7 +38,7 @@ class OneLastImagePlugin(Star):
         else:
             logger.warning(f"OneLastImage 插件 'default_params' 配置类型未知 (期待 dict 或 str, 得到 {type(default_params_config)})。将使用空配置。")
             self.default_params = {}
-        
+
         self.client = httpx.AsyncClient()
 
         if not self.api_url or "YOUR_VERCEL_API_URL_HERE" in self.api_url:
@@ -52,17 +53,17 @@ class OneLastImagePlugin(Star):
         logger.info("OneLastImage 插件已关闭 httpx 客户端。")
 
     # 图片提取函数
-    async def get_image_from_direct_event(self, event: AstrMessageEvent) -> List[Comp.Image]:
+    async def get_image_from_direct_event(self, event: AstrMessageEvent) -> list[Comp.Image]:
         """
         从当前事件中提取所有图片 (包括直接发送和回复的)
         """
         images = []
-        if hasattr(event, 'message_obj') and event.message_obj and hasattr(event.message_obj, 'message'):
+        if hasattr(event, "message_obj") and event.message_obj and hasattr(event.message_obj, "message"):
             for component in event.message_obj.message:
                 if isinstance(component, Comp.Image):
                     images.append(component)
                 elif isinstance(component, Comp.Reply):
-                    replied_chain = getattr(component, 'chain', None)
+                    replied_chain = getattr(component, "chain", None)
                     if replied_chain:
                         for reply_comp in replied_chain:
                             if isinstance(reply_comp, Comp.Image):
@@ -77,24 +78,24 @@ class OneLastImagePlugin(Star):
                 unique_images.append(img)
         return unique_images
 
-    async def download_image(self, image: Comp.Image) -> Optional[bytes]:
+    async def download_image(self, image: Comp.Image) -> bytes | None:
         """
         将 AstrBot 的图片组件 (Comp.Image) 下载为字节数据。
         """
         try:
             base64_str = await image.convert_to_base64()
-            
+
             if not base64_str:
                 logger.warning(f"convert_to_base64 failed for image: url={image.url}, file={image.file}")
                 return None
             # 2. 将 Base64 字符串解码为原始字节
             return base64.b64decode(base64_str)
-            
+
         except Exception as e:
             logger.error(f"Failed to download/read image using convert_to_base64 ({image.url or image.file}): {e}", exc_info=True)
             return None
 
-    async def process_and_compress_image(self, image_bytes: bytes) -> Optional[io.BytesIO]:
+    async def process_and_compress_image(self, image_bytes: bytes) -> io.BytesIO | None:
         """
         将图片字节转换为 JPEG 格式，并确保大小不超过配置的限制。
         在线程中执行以避免阻塞。
@@ -102,11 +103,11 @@ class OneLastImagePlugin(Star):
         def _process():
             try:
                 img = Image.open(io.BytesIO(image_bytes))
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+
                 buffer = io.BytesIO()
-                
+
                 # 尝试 1: 质量 85 (JPEG)
                 img.save(buffer, format="JPEG", quality=85)
                 if buffer.tell() <= self.max_file_size_bytes:
@@ -130,24 +131,24 @@ class OneLastImagePlugin(Star):
                 # 失败
                 logger.warning(f"Image size ({buffer.tell()} bytes) exceeds {self.max_file_size_mb}MB even after compression (quality 50).")
                 return None
-                    
+
             except Exception as e:
                 logger.error(f"Image processing (PIL) failed: {e}")
                 return None
-        
+
         # 在线程池中运行 PIL 处理
         return await asyncio.to_thread(_process)
 
-    async def call_api(self, image_buffer: io.BytesIO, config: dict) -> Optional[bytes]:
+    async def call_api(self, image_buffer: io.BytesIO, config: dict) -> bytes | None:
         """
         调用 Vercel API 并返回生成的图片字节。
         """
-        files = {'image': ('image.jpg', image_buffer, 'image/jpeg')}
-        data = {'config': json.dumps(config)}
-        
+        files = {"image": ("image.jpg", image_buffer, "image/jpeg")}
+        data = {"config": json.dumps(config)}
+
         try:
-            response = await self.client.post(self.api_url, files=files, data=data, timeout=30) 
-            
+            response = await self.client.post(self.api_url, files=files, data=data, timeout=30)
+
             if response.status_code == 200:
                 return response.content
             else:
@@ -161,7 +162,7 @@ class OneLastImagePlugin(Star):
             raise # 抛出异常
 
     @filter.command("onelast")
-    async def onelast_command(self, event: AstrMessageEvent, config_str: Optional[str] = None):
+    async def onelast_command(self, event: AstrMessageEvent, config_str: str | None = None):
         """
         命令处理器:
         /onelast - 使用默认配置
@@ -179,8 +180,8 @@ class OneLastImagePlugin(Star):
                 return
 
             # 2. 解析配置
-            current_config = self.default_params.copy() 
-            
+            current_config = self.default_params.copy()
+
             # 检查 config_str 是否为 None
             if config_str:
                 user_config_str = config_str.strip()
@@ -190,11 +191,11 @@ class OneLastImagePlugin(Star):
                     if not isinstance(user_params, dict):
                         raise ValueError("Input is not a dictionary")
                     # 合并配置，用户输入覆盖默认配置
-                    current_config.update(user_params) 
+                    current_config.update(user_params)
                 except (json.JSONDecodeError, ValueError) as e: # 明确捕获 JSON 和 Value 错误
                     logger.warning(f"Failed to parse user config '{user_config_str}': {e}")
                     # 要求严格的 JSON 格式 (键和字符串都用双引号)
-                    yield event.plain_result(f"参数格式错误，请提供有效的JSON字典字符串，例如：\n/onelast {{\"watermark\":true,\"hajimei\":true}}")
+                    yield event.plain_result('参数格式错误，请提供有效的JSON字典字符串，例如：\n/onelast {"watermark":true,"hajimei":true}')
                     return
 
             # 3. 处理图片
@@ -211,19 +212,19 @@ class OneLastImagePlugin(Star):
                     if not image_bytes:
                         yield event.plain_result(f"第 {i+1} 张图片下载失败。")
                         continue
-                    
+
                     # 5. 压缩
                     image_buffer = await self.process_and_compress_image(image_bytes)
                     if not image_buffer:
                         # 使用配置中的大小
                         yield event.plain_result(f"第 {i+1} 张图片处理失败：压缩后仍超过 {self.max_file_size_mb}MB。")
                         continue
-                    
+
                     # 6. 调用 API
                     result_bytes = await self.call_api(image_buffer, current_config)
                     if result_bytes:
                         # 将原始 bytes 编码为 base64 字符串，并使用 base64:// URI
-                        result_base64_str = base64.b64encode(result_bytes).decode('utf-8')
+                        result_base64_str = base64.b64encode(result_bytes).decode("utf-8")
                         yield event.chain_result([Comp.Image(file=f"base64://{result_base64_str}")])
                     else:
                         yield event.plain_result(f"第 {i+1} 张图片 API 请求失败，未返回图片。")
